@@ -82,6 +82,9 @@ def _wrap_with_default_query_class(obj, fn):
         return fn(*args, **kwargs)
     return newfn
 
+def _to_list(item):
+    """Pop an item into a list if it's not already a list."""
+    return [item] if type(item) != list else item
 
 def _include_sqlalchemy(obj):
     for module in sqlalchemy, sqlalchemy.orm:
@@ -465,17 +468,25 @@ class _EngineConnector(object):
             echo = self._app.config['SQLALCHEMY_ECHO']
             if (uri, echo) == self._connected_for:
                 return self._engine
-            info = make_url(uri)
-            options = {'convert_unicode': True}
-            self._sa.apply_pool_defaults(self._app, options)
-            self._sa.apply_driver_hacks(self._app, info, options)
-            if _record_queries(self._app):
-                options['proxy'] = _ConnectionDebugProxy(self._app.import_name)
-            if echo:
-                options['echo'] = True
-            self._engine = rv = sqlalchemy.create_engine(info, **options)
+            uri_list = _to_list(uri)
+            engines = []
+            for u in uri_list:
+                info = make_url(u)
+                options = {'convert_unicode': True}
+                self._sa.apply_pool_defaults(self._app, options)
+                self._sa.apply_driver_hacks(self._app, info, options)
+                if _record_queries(self._app):
+                    options['proxy'] = _ConnectionDebugProxy(self._app.import_name)
+                if echo:
+                    options['echo'] = True
+                engines.append(sqlalchemy.create_engine(info, **options))
             self._connected_for = (uri, echo)
-            return rv
+            if len(engines) == 1:
+                self._engine = engines[0]
+                return engines[0]
+            else:
+                self._engine = engines
+                return engines
 
 
 def _defines_primary_key(d):
@@ -836,6 +847,13 @@ class SQLAlchemy(object):
             retval.update(dict((table, engine) for table in tables))
         return retval
 
+    def _execute_for_bind(self, bind, app, operation):
+        tables = self.get_tables_for_bind(bind)
+        op = getattr(self.Model.metadata, operation)
+        engines = _to_list(self.get_engine(app, bind))
+        for engine in engines:
+            op(bind=engine, tables=tables)
+
     def _execute_for_all_tables(self, app, bind, operation):
         app = self.get_app(app)
 
@@ -847,9 +865,7 @@ class SQLAlchemy(object):
             binds = bind
 
         for bind in binds:
-            tables = self.get_tables_for_bind(bind)
-            op = getattr(self.Model.metadata, operation)
-            op(bind=self.get_engine(app, bind), tables=tables)
+            self._execute_for_bind(bind, app, operation)
 
     def create_all(self, bind='__all__', app=None):
         """Creates all tables.

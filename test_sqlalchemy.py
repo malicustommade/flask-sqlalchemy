@@ -231,8 +231,11 @@ class BindsTestCase(unittest.TestCase):
 
         db.create_all()
 
-        # simple way to check if the engines are looked up properly
         self.assertEqual(db.get_engine(app, None), db.engine)
+        #Check if engine reference is being cached
+        self.assertEqual(db.get_engine(app), db.get_engine(app))
+
+        # simple way to check if the engines are looked up properly
         for key in 'foo', 'bar':
             engine = db.get_engine(app, key)
             connector = app.extensions['sqlalchemy'].connectors[key]
@@ -266,6 +269,99 @@ class BindsTestCase(unittest.TestCase):
             Foo.__table__: db.get_engine(app, 'foo'),
             Bar.__table__: db.get_engine(app, 'bar'),
             Baz.__table__: db.get_engine(app, None)
+        })
+
+    def test_sharded_binds(self):
+        import tempfile
+        _, db1 = tempfile.mkstemp()
+        _, db2 = tempfile.mkstemp()
+        _, db3 = tempfile.mkstemp()
+        _, db4 = tempfile.mkstemp()
+        _, db5 = tempfile.mkstemp()
+        _, db6 = tempfile.mkstemp()
+        dbs = [db1, db2, db3, db4, db5, db6]
+
+        def _remove_files():
+            import os
+            try:
+                for db in dbs:
+                    os.remove(db)
+            except IOError:
+                pass
+        atexit.register(_remove_files)
+
+        def path_to_dsn(db_path):
+            return "sqlite:///" + db_path
+
+        app = flask.Flask(__name__)
+        app.config['SQLALCHEMY_ENGINE'] = 'sqlite://'
+        app.config['SQLALCHEMY_BINDS'] = {
+            'foo': [path_to_dsn(db1), path_to_dsn(db2), path_to_dsn(db3)],
+            'bar': [path_to_dsn(db4), path_to_dsn(db5)],
+            'baz': path_to_dsn(db6)
+        }
+        db = sqlalchemy.SQLAlchemy(app)
+
+        class Foo(db.Model):
+            __table_args__ = {"info": {"bind_key": "foo"}}
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Bar(db.Model):
+            __bind_key__ = 'bar'
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Baz(db.Model):
+            __bind_key__ = 'baz'
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Quux(db.Model):
+            id = db.Column(db.Integer, primary_key=True)
+
+        db.create_all()
+
+        # simple way to check if the engines are looked up properly
+        self.assertEqual(db.get_engine(app, None), db.engine)
+        for key in 'foo', 'bar', 'baz':
+            engine = db.get_engine(app, key)
+            connector = app.extensions['sqlalchemy'].connectors[key]
+            self.assertEqual(engine, connector.get_engine())
+            if type(engine) == list:
+                for e in engine:
+                    self.assertTrue(str(e.url) in app.config['SQLALCHEMY_BINDS'][key])
+            else:
+                self.assertEqual(str(engine.url),
+                                 app.config['SQLALCHEMY_BINDS'][key])
+
+
+        # do the models have the correct engines?
+        self.assertEqual(db.metadata.tables['foo'].info['bind_key'], 'foo')
+        self.assertEqual(db.metadata.tables['bar'].info['bind_key'], 'bar')
+        self.assertEqual(db.metadata.tables['baz'].info['bind_key'], 'baz')
+        self.assertEqual(db.metadata.tables['quux'].info.get('bind_key', None), None)
+
+        # see the tables created in an engine
+        # TODO: mod metadata so it can take engine lists
+        metadata = db.MetaData()
+        metadata.reflect(bind=db.get_engine(app, 'foo')[0])
+        self.assertEqual(len(metadata.tables), 1)
+        self.assertTrue('foo' in metadata.tables)
+
+        metadata = db.MetaData()
+        metadata.reflect(bind=db.get_engine(app, 'bar')[0])
+        self.assertEqual(len(metadata.tables), 1)
+        self.assertTrue('bar' in metadata.tables)
+
+        metadata = db.MetaData()
+        metadata.reflect(bind=db.get_engine(app, 'baz'))
+        self.assertEqual(len(metadata.tables), 1)
+        self.assertTrue('baz' in metadata.tables)
+
+        # do the session have the right binds set?
+        self.assertEqual(db.get_binds(app), {
+            Foo.__table__: db.get_engine(app, 'foo'),
+            Bar.__table__: db.get_engine(app, 'bar'),
+            Baz.__table__: db.get_engine(app, 'baz'),
+            Quux.__table__: db.get_engine(app)
         })
 
 
