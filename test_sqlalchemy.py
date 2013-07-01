@@ -364,6 +364,66 @@ class BindsTestCase(unittest.TestCase):
             Quux.__table__: db.get_engine(app)
         })
 
+class ShardingTestCase(unittest.TestCase):
+
+    def test_sharded_binds(self):
+        import tempfile
+        _, db1 = tempfile.mkstemp()
+        _, db2 = tempfile.mkstemp()
+        _, db3 = tempfile.mkstemp()
+        _, db4 = tempfile.mkstemp()
+        _, db5 = tempfile.mkstemp()
+        _, db6 = tempfile.mkstemp()
+        dbs = [db1, db2, db3, db4, db5, db6]
+
+        def _remove_files():
+            import os
+            try:
+                for db in dbs:
+                    os.remove(db)
+            except IOError:
+                pass
+        atexit.register(_remove_files)
+
+        def path_to_dsn(db_path):
+            return "sqlite:///" + db_path
+
+        app = flask.Flask(__name__)
+        app.config['SQLALCHEMY_ENGINE'] = 'sqlite://'
+        app.config['SQLALCHEMY_BINDS'] = {
+            'foo': {"0": path_to_dsn(db1), "1": path_to_dsn(db2), "2": path_to_dsn(db3)},
+            'bar': {"banana": path_to_dsn(db4), "apple": path_to_dsn(db5)},
+            'baz': path_to_dsn(db6)
+        }
+        db = sqlalchemy.SQLAlchemy(app)
+
+        class Foo(db.Model):
+            __table_args__ = {"info": {"bind_key": "foo"}}
+            __id_chooser__ = lambda query, id: str(id % 3)
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Bar(db.Model):
+            __bind_key__ = 'bar'
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Baz(db.Model):
+            __bind_key__ = 'baz'
+            id = db.Column(db.Integer, primary_key=True)
+
+        class Quux(db.Model):
+            id = db.Column(db.Integer, primary_key=True)
+
+        db.create_all()
+
+        f1, f2, f3, f4 = Foo(id=1), Foo(id=2), Foo(id=3), Foo(id=4)
+        db.session.add(f1)
+        db.session.add(f2)
+        db.session.add(f3)
+        db.session.add(f4)
+        db.session.commit()
+
+
+
 
 class DefaultQueryClassTestCase(unittest.TestCase):
 

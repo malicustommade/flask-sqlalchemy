@@ -492,7 +492,7 @@ class _EngineConnector(object):
                 engines = {}
                 for shard_id, u in uri.iteritems():
                     info, options = self.prepare_engine(u, echo)
-                    engines["shard_id"] = sqlalchemy.create_engine(info, **options)
+                    engines[shard_id] = sqlalchemy.create_engine(info, **options)
                 self._engine = engines
             else:
                 info, options = self.prepare_engine(uri, echo)
