@@ -84,7 +84,13 @@ def _wrap_with_default_query_class(obj, fn):
 
 def _to_list(item):
     """Pop an item into a list if it's not already a list."""
-    return [item] if type(item) != list else item
+    t = type(item)
+    if t == list:
+        return item
+    elif t == dict:
+        return item.values()
+    else:
+        return [item]
 
 def _include_sqlalchemy(obj):
     for module in sqlalchemy, sqlalchemy.orm:
@@ -456,11 +462,23 @@ class _EngineConnector(object):
     def get_uri(self):
         if self._bind is None:
             return self._app.config['SQLALCHEMY_DATABASE_URI']
-        binds = self._app.config.get('SQLALCHEMY_BINDS') or ()
+        binds = self._app.config.get('SQLALCHEMY_BINDS') or ().values()
         assert self._bind in binds, \
             'Bind %r is not specified.  Set it in the SQLALCHEMY_BINDS ' \
             'configuration variable' % self._bind
         return binds[self._bind]
+
+    def prepare_engine(self, url, echo):
+        info = make_url(url)
+        options = {'convert_unicode': True}
+        self._sa.apply_pool_defaults(self._app, options)
+        self._sa.apply_driver_hacks(self._app, info, options)
+        if _record_queries(self._app):
+            options['proxy'] = _ConnectionDebugProxy(self._app.import_name)
+        if echo:
+            options['echo'] = True
+        return info, options
+
 
     def get_engine(self):
         with self._lock:
@@ -468,25 +486,18 @@ class _EngineConnector(object):
             echo = self._app.config['SQLALCHEMY_ECHO']
             if (uri, echo) == self._connected_for:
                 return self._engine
-            uri_list = _to_list(uri)
-            engines = []
-            for u in uri_list:
-                info = make_url(u)
-                options = {'convert_unicode': True}
-                self._sa.apply_pool_defaults(self._app, options)
-                self._sa.apply_driver_hacks(self._app, info, options)
-                if _record_queries(self._app):
-                    options['proxy'] = _ConnectionDebugProxy(self._app.import_name)
-                if echo:
-                    options['echo'] = True
-                engines.append(sqlalchemy.create_engine(info, **options))
+
             self._connected_for = (uri, echo)
-            if len(engines) == 1:
-                self._engine = engines[0]
-                return engines[0]
-            else:
+            if type(uri) == dict:
+                engines = {}
+                for shard_id, u in uri.iteritems():
+                    info, options = self.prepare_engine(u, echo)
+                    engines["shard_id"] = sqlalchemy.create_engine(info, **options)
                 self._engine = engines
-                return engines
+            else:
+                info, options = self.prepare_engine(uri, echo)
+                self._engine = sqlalchemy.create_engine(info, **options)
+            return self._engine
 
 
 def _defines_primary_key(d):

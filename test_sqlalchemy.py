@@ -296,8 +296,8 @@ class BindsTestCase(unittest.TestCase):
         app = flask.Flask(__name__)
         app.config['SQLALCHEMY_ENGINE'] = 'sqlite://'
         app.config['SQLALCHEMY_BINDS'] = {
-            'foo': [path_to_dsn(db1), path_to_dsn(db2), path_to_dsn(db3)],
-            'bar': [path_to_dsn(db4), path_to_dsn(db5)],
+            'foo': {"cat": path_to_dsn(db1), "dog": path_to_dsn(db2), "bird": path_to_dsn(db3)},
+            'bar': {"banana": path_to_dsn(db4), "apple": path_to_dsn(db5)},
             'baz': path_to_dsn(db6)
         }
         db = sqlalchemy.SQLAlchemy(app)
@@ -325,9 +325,9 @@ class BindsTestCase(unittest.TestCase):
             engine = db.get_engine(app, key)
             connector = app.extensions['sqlalchemy'].connectors[key]
             self.assertEqual(engine, connector.get_engine())
-            if type(engine) == list:
-                for e in engine:
-                    self.assertTrue(str(e.url) in app.config['SQLALCHEMY_BINDS'][key])
+            if type(engine) == dict:
+                for e in engine.values():
+                    self.assertTrue(str(e.url) in app.config['SQLALCHEMY_BINDS'][key].values())
             else:
                 self.assertEqual(str(engine.url),
                                  app.config['SQLALCHEMY_BINDS'][key])
@@ -342,12 +342,12 @@ class BindsTestCase(unittest.TestCase):
         # see the tables created in an engine
         # TODO: mod metadata so it can take engine lists
         metadata = db.MetaData()
-        metadata.reflect(bind=db.get_engine(app, 'foo')[0])
+        metadata.reflect(bind=db.get_engine(app, 'foo').values()[0])
         self.assertEqual(len(metadata.tables), 1)
         self.assertTrue('foo' in metadata.tables)
 
         metadata = db.MetaData()
-        metadata.reflect(bind=db.get_engine(app, 'bar')[0])
+        metadata.reflect(bind=db.get_engine(app, 'bar').values()[0])
         self.assertEqual(len(metadata.tables), 1)
         self.assertTrue('bar' in metadata.tables)
 
