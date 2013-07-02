@@ -366,7 +366,7 @@ class BindsTestCase(unittest.TestCase):
 
 class ShardingTestCase(unittest.TestCase):
 
-    def test_sharded_binds(self):
+    def test_sharding(self):
         import tempfile
         _, db1 = tempfile.mkstemp()
         _, db2 = tempfile.mkstemp()

@@ -439,7 +439,8 @@ class ShardingQueryMixin(object):
                                                 self._params)
             return self.instances(result, context)
 
-        if self._shard_id is not None:
+        if self._shard_id is not None or not\
+            self.session.table_is_sharded(self.session.get_table(query=self)):
             return iter_for_shard(self._shard_id)
         else:
             partial = []
@@ -451,7 +452,8 @@ class ShardingQueryMixin(object):
             return iter(partial)
 
     def get(self, ident, **kwargs):
-        if self._shard_id is not None:
+        if self._shard_id is not None or not\
+            self.session.table_is_sharded(self.session.get_table(query=self)):
             return super(ShardingQueryMixin, self).get(ident)
         else:
             ident = util.to_list(ident)
@@ -474,6 +476,30 @@ class BaseQuery(ShardingQueryMixin, FlaskQueryMixin, orm.Query):
 
 
 class ShardingSessionMixin(object):
+
+    def connection(self, mapper=None, instance=None, shard_id=None, **kwargs):
+        table = self.get_table(mapper=mapper)
+        if not self.table_is_sharded(table):
+            return super(ShardingSessionMixin, self).connection(mapper=mapper, **kwargs)
+
+        if shard_id is None:
+            shard_id = self.shard_chooser(mapper, instance)
+
+        if self.transaction is not None:
+            return self.transaction.connection(mapper, shard_id=shard_id)
+        else:
+            return self.get_bind(mapper,
+                                shard_id=shard_id,
+                                instance=instance).contextual_connect(**kwargs)
+
+    def get_bind(self, mapper, shard_id=None,
+                 instance=None, clause=None, **kw):
+        table = self.get_table(mapper=mapper)
+        if not self.table_is_sharded(table):
+            return super(ShardingSessionMixin, self).get_bind(mapper, instance, clause, **kw)
+        if shard_id is None:
+            shard_id = self.shard_chooser(mapper, instance, clause=clause)
+        return self.__binds[shard_id]
 
     @staticmethod
     def get_table(mapper=None, query=None):
