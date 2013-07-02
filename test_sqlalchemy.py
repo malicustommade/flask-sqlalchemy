@@ -415,6 +415,8 @@ class ShardingTestCase(unittest.TestCase):
 
         db.create_all()
 
+
+        #Test sharded writes and shard_chooser
         f1, f2, f3, f4 = Foo(id=1), Foo(id=2), Foo(id=3), Foo(id=4)
         db.session.add(f1)
         db.session.add(f2)
@@ -422,6 +424,19 @@ class ShardingTestCase(unittest.TestCase):
         db.session.add(f4)
         db.session.commit()
 
+        #Test sharded reads with get
+        for id in xrange(1,5):
+            new_f = Foo.query.get(id)
+            self.assertEqual(id, new_f.id)
+
+        #Sharded reads with query
+        all_foos = Foo.query.all()
+        self.assertEqual(len(all_foos), 4)
+
+        #Filter
+        for id in xrange(1,5):
+            new_f = Foo.query.filter(id=id)
+            self.assertEqual(id, new_f.id)
 
 
 

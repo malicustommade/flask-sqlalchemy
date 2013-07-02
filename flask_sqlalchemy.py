@@ -21,14 +21,13 @@ from flask import _request_ctx_stack, abort
 from flask.signals import Namespace
 from operator import itemgetter
 from threading import Lock
-from sqlalchemy import orm, event
+from sqlalchemy import orm, event, util
 from sqlalchemy.orm.exc import UnmappedClassError
 from sqlalchemy.orm.session import Session
 from sqlalchemy.event import listen
 from sqlalchemy.interfaces import ConnectionProxy
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.declarative import declarative_base, DeclarativeMeta
-from sqlalchemy.util import to_list
 
 # the best timer function for the platform
 if sys.platform == 'win32':
@@ -182,9 +181,6 @@ class SignallingSessionMixin(object):
                 state = get_state(self.app)
                 return state.db.get_engine(self.app, bind=bind_key)
         return Session.get_bind(self, mapper, clause)
-
-class _SignallingSession(SignallingSessionMixin, Session):
-    pass
 
 
 class _SessionSignalEvents(object):
@@ -415,8 +411,58 @@ class FlaskQueryMixin(object):
 
         return Pagination(self, page, per_page, total, items)
 
+class ShardingQueryMixin(object):
+    def __init__(self, *args, **kwargs):
+        super(ShardingQueryMixin, self).__init__(*args, **kwargs)
+        self.id_chooser = self.session.id_chooser
+        self.query_chooser = self.session.query_chooser
+        self._shard_id = None
 
-class BaseQuery(FlaskQueryMixin, orm.Query):
+    def set_shard(self, shard_id):
+        """return a new query, limited to a single shard ID.
+
+        all subsequent operations with the returned query will
+        be against the single shard regardless of other state.
+        """
+
+        q = self._clone()
+        q._shard_id = shard_id
+        return q
+
+    def _execute_and_instances(self, context):
+        def iter_for_shard(shard_id):
+            context.attributes['shard_id'] = shard_id
+            result = self._connection_from_session(
+                            mapper=self._mapper_zero(),
+                            shard_id=shard_id).execute(
+                                                context.statement,
+                                                self._params)
+            return self.instances(result, context)
+
+        if self._shard_id is not None:
+            return iter_for_shard(self._shard_id)
+        else:
+            partial = []
+            for shard_id in self.query_chooser(self):
+                partial.extend(iter_for_shard(shard_id))
+
+            # if some kind of in memory 'sorting'
+            # were done, this is where it would happen
+            return iter(partial)
+
+    def get(self, ident, **kwargs):
+        if self._shard_id is not None:
+            return super(ShardingQueryMixin, self).get(ident)
+        else:
+            ident = util.to_list(ident)
+            for shard_id in self.id_chooser(self, ident):
+                o = self.set_shard(shard_id).get(ident, **kwargs)
+                if o is not None:
+                    return o
+            else:
+                return None
+
+class BaseQuery(ShardingQueryMixin, FlaskQueryMixin, orm.Query):
     """The default query object used for models, and exposed as
     :attr:`~SQLAlchemy.Query`. This can be replaced for individual models by
     setting the :attr:`~Model.query_class` attribute. This is a subclass of a
@@ -424,6 +470,58 @@ class BaseQuery(FlaskQueryMixin, orm.Query):
     the methods of a standard query as well. If you want relationships to
     return
     """
+    pass
+
+
+class ShardingSessionMixin(object):
+
+    @staticmethod
+    def get_table(mapper=None, query=None):
+        if mapper is not None:
+            return mapper.mapped_table
+        elif query is not None:
+            return query._only_full_mapper_zero("get").mapped_table
+        else:
+            raise ValueError("Must give either query or mapper to get_table")
+
+    @staticmethod
+    def get_hook_from_table(table, hook_name):
+        return table.info.get(hook_name, None)
+
+    @staticmethod
+    def table_is_sharded(table):
+        return type(table.info.get("bind_key", None)) == dict
+
+    def get_shards_from_table(self, table):
+        return get_state(self.app).db\
+                .get_engine(self.app, table.info.get("bind_key"))
+
+    def id_chooser(self, query, ident):
+        table = self.get_table(query=query)
+        id_chooser = self.get_hook_from_table(table, "id_chooser")
+        if id_chooser is None:
+            return self.get_shards_from_table(table)
+        else:
+            return id_chooser(query, ident)
+
+    def query_chooser(self, query):
+        table = self.get_table(query=query)
+        query_chooser = self.get_hook_from_table(table, "query_chooser")
+        if query_chooser is None:
+            return self.get_shards_from_table(table)
+        else:
+            return query_chooser(query)
+
+    def shard_chooser(self, mapper, instance, clause=None):
+        table = self.get_table(mapper=mapper)
+        shard_chooser = self.get_hook_from_table(table, "shard_chooser")
+        if shard_chooser is None:
+            return self.get_shards_from_table(table)
+        else:
+            return shard_chooser(mapper, instance, clause)
+
+
+class _SignallingSession(SignallingSessionMixin, ShardingSessionMixin, Session):
     pass
 
 class _QueryProperty(object):
