@@ -172,15 +172,15 @@ class SignallingSessionMixin(object):
                          bind=db.engine,
                          binds=db.get_binds(self.app), **options)
 
-    def get_bind(self, mapper, clause=None):
-        # mapper is None if someone tries to just get a connection
-        if mapper is not None:
-            info = getattr(mapper.mapped_table, 'info', {})
-            bind_key = info.get('bind_key')
-            if bind_key is not None:
-                state = get_state(self.app)
-                return state.db.get_engine(self.app, bind=bind_key)
-        return Session.get_bind(self, mapper, clause)
+    #def get_bind(self, mapper, clause=None):
+    #    # mapper is None if someone tries to just get a connection
+    #    if mapper is not None:
+    #        info = getattr(mapper.mapped_table, 'info', {})
+    #        bind_key = info.get('bind_key')
+    #        if bind_key is not None:
+    #            state = get_state(self.app)
+    #            return state.db.get_engine(self.app, bind=bind_key)
+    #    return Session.get_bind(self, mapper, clause)
 
 
 class _SessionSignalEvents(object):
@@ -496,7 +496,7 @@ class ShardingSessionMixin(object):
                  instance=None, clause=None, **kw):
         table = self.get_table(mapper=mapper)
         if not self.table_is_sharded(table):
-            return super(ShardingSessionMixin, self).get_bind(mapper, instance, clause, **kw)
+            return super(ShardingSessionMixin, self).get_bind(mapper, clause, **kw)
         if shard_id is None:
             shard_id = self.shard_chooser(mapper, instance, clause=clause)
         return self.__binds[shard_id]
@@ -547,7 +547,7 @@ class ShardingSessionMixin(object):
             return shard_chooser(mapper, instance, clause)
 
 
-class _SignallingSession(SignallingSessionMixin, ShardingSessionMixin, Session):
+class _SignallingSession(ShardingSessionMixin, SignallingSessionMixin, Session):
     pass
 
 class _QueryProperty(object):
